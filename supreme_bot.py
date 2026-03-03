@@ -6,9 +6,9 @@ import re
 import time
 import logging
 import base64
-from urllib.parse import urljoin, urlparse, parse_qs, unquote
 import requests
 import cloudscraper
+from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote
 from bs4 import BeautifulSoup
 
 # ─── Logging Setup ──────────────────────────────────────────────
@@ -72,11 +72,15 @@ def get_session():
     logger.info("[SESSION] Using cloudscraper (Cloudflare bypass)")
     return sess
 
-def fetch(session, url, retries=3):
+def fetch(session, url, retries=3, referer=None):
+    # Encode URL to handle Arabic characters in headers (safeguard)
+    target_url = safe_encode_url(url)
+    
     for attempt in range(retries):
         try:
             time.sleep(1.5)
-            resp = session.get(url, timeout=30, allow_redirects=True)
+            headers = {"Referer": safe_encode_url(referer) if referer else (BASE_URL + "/")}
+            resp = session.get(target_url, timeout=30, allow_redirects=True, headers=headers)
             if resp.status_code == 200:
                 return resp.text
             else:
@@ -100,6 +104,15 @@ def abs_url(href):
     for dom in ["shaaheid4u.net", "shhahiid4u.net", "shaaheed4u.net", "shhid4u.net"]:
         url = url.replace(dom, "shahhed4u.net")
     return url
+
+def safe_encode_url(url):
+    """Encodes Arabic characters in URL path to avoid header encoding errors"""
+    try:
+        p = urlparse(url)
+        path = quote(p.path)
+        return f"{p.scheme}://{p.netloc}{path}" + (f"?{p.query}" if p.query else "")
+    except:
+        return url
 
 # ─── Saving Logic ───────────────────────────────────────────────
 def get_latest_file_info():
@@ -146,27 +159,40 @@ def save_and_rotate(results, current_info):
 # ─── Extraction ─────────────────────────────────────────────────
 def extract_metadata(soup, url):
     meta = {"url": url, "title": "", "poster": "", "description": "", "year": "2026", "quality": "", "categories": []}
+    
+    # Title
     t = soup.find("meta", property="og:title")
-    if t: meta["title"] = t.get("content", "").replace("مشاهدة ", "").strip()
-    elif soup.title: meta["title"] = soup.title.string.strip()
+    if t:
+        meta["title"] = t.get("content", "").replace("مشاهدة ", "").replace("تحميل ", "").strip()
+    elif soup.title:
+        meta["title"] = soup.title.string.strip()
     
+    # Poster
     img = soup.find("meta", property="og:image")
-    if img: meta["poster"] = img.get("content", "")
+    if not img:
+        img = soup.select_one(".post-thumb img, .poster img, img[src*='/uploads/']")
     
+    if img:
+        meta["poster"] = abs_url(img.get("content") or img.get("src") or img.get("data-src"))
+    
+    # Description
     desc = soup.find("meta", property="og:description")
-    if desc: meta["description"] = desc.get("content", "").strip()
+    if not desc:
+        desc = soup.select_one(".story, .desc, .post-content")
     
-    # استخراج التصنيفات
+    if desc:
+        meta["description"] = desc.get("content", desc.get_text(strip=True)) if hasattr(desc, 'get') else desc.get_text(strip=True)
+
+    # Categories
     for c in soup.select(".categ, .category, .post-category a"):
         meta["categories"].append(c.get_text(strip=True))
 
-    # محاولة العثور على رابط المسلسل من صفحة الحلقة
+    # Series link from episode page
     series_link = soup.select_one('a[href*="/series/"], a[href*="/mosalsal/"], a[href*="/season/"], .breadcrumb a[href*="/series/"]')
     if not series_link:
-        # البحث عن نصوص معينة
         for a in soup.find_all("a", href=True):
             txt = a.get_text(strip=True)
-            if "جميع الحلقات" in txt or "كل الحلقات" in txt or "المسلسل" in txt:
+            if any(k in txt for k in ["جميع الحلقات", "كل الحلقات", "المسلسل"]):
                 series_link = a
                 break
     
@@ -175,10 +201,12 @@ def extract_metadata(soup, url):
     
     return meta
 
-def scrape_watch_links(session, url):
-    html = fetch(session, url)
+def scrape_watch_links(session, url, referer):
+    html = fetch(session, url, referer=referer)
     if not html: return []
     servers = []
+    
+    # Method 1: JSON.parse
     match = re.search(r"JSON\.parse\('(\[.*?\])'\)", html)
     if match:
         try:
@@ -186,36 +214,48 @@ def scrape_watch_links(session, url):
             for s in json.loads(raw):
                 u = s.get("url", "")
                 if u:
-                    if u.startswith("/"): u = BASE_URL + u
                     servers.append({"name": s.get("name", "Server"), "url": abs_url(u)})
         except: pass
+    
+    # Method 2: Iframes and regular links
+    soup = BeautifulSoup(html, "html.parser")
     if not servers:
-        soup = BeautifulSoup(html, "html.parser")
         for iframe in soup.find_all("iframe"):
             src = iframe.get("src") or iframe.get("data-src")
-            if src and src.startswith("https") and not any(ex in src for ex in EXCLUDED_DOMAINS):
-                servers.append({"name": "Embed", "url": src})
+            if src and src.startswith("http") and not any(ex in src for ex in EXCLUDED_DOMAINS):
+                servers.append({"name": "Embed", "url": abs_url(src)})
+        
+        for a in soup.select(".servers a, .watch-servers a"):
+            href = a.get("href")
+            if href and not any(ex in href for ex in EXCLUDED_DOMAINS):
+                servers.append({"name": a.get_text(strip=True) or "Server", "url": abs_url(href)})
+
     return servers
 
 def scrape_episode_data(session, url):
     html = fetch(session, url)
     if not html: return [], []
     soup = BeautifulSoup(html, "html.parser")
+    
     w_url, d_url = None, None
     for a in soup.find_all("a", href=True):
         h = abs_url(a["href"])
         if h and "/watch/" in h: w_url = h
         elif h and "/download/" in h: d_url = h
-    watch = scrape_watch_links(session, w_url) if w_url else []
+    
+    # Pass episode URL as referer to the watch page
+    watch = scrape_watch_links(session, w_url, url) if w_url else []
     dl = []
+    
     if d_url:
-        d_html = fetch(session, d_url)
+        d_html = fetch(session, d_url, referer=url)
         if d_html:
             dsoup = BeautifulSoup(d_html, "html.parser")
-            for a in dsoup.select("a.btn-down, .servers a[href]"):
+            for a in dsoup.select("a.btn-down, .servers a[href], .download-links a"):
                 href = a.get("href")
-                if href and href.startswith("https") and not any(ex in href for ex in EXCLUDED_DOMAINS):
-                    dl.append({"name": a.get_text(strip=True) or "DL", "url": href})
+                if href and href.startswith("http") and not any(ex in href for ex in EXCLUDED_DOMAINS):
+                    name = a.get_text(strip=True) or "DL"
+                    dl.append({"name": name, "url": abs_url(href)})
     return watch, dl
 
 # ─── Process Item ───────────────────────────────────────────────
@@ -263,18 +303,21 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
             return
 
     def get_id(u, poster):
-        m = re.search(r'/(\d+)', poster)
+        m = re.search(r'/(\d+)', poster or '')
         return m.group(1) if m else str(abs(hash(u)))[:10]
 
     native_id = parent_id or get_id(url, meta['poster'])
     item_type = "series" if is_series else ("season" if is_season else ("movie" if "/film/" in url else "episode"))
+
+    # If it's an episode, the ID should match the parent_id as per user's example
+    display_id = native_id
 
     # حفظ المسلسل أو الموسم أو الفيلم
     if (is_series or is_season) and not parent_id:
         if url not in processed_series:
             logger.info(f"[*] SERIES/SEASON: {meta['title']}")
             results.append({
-                "id": native_id, "type": item_type, "title": meta["title"],
+                "id": display_id, "type": item_type, "title": meta["title"],
                 "poster": meta["poster"], "description": meta["description"], "url": url
             })
             processed_series.add(url)
@@ -384,7 +427,7 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
         ep_num = int(ep_match.group(1)) if ep_match else 0
 
         item = {
-            "id": native_id, "url": url, "type": "episode" if is_episode else "movie",
+            "id": display_id, "url": url, "type": "episode" if is_episode else "movie",
             "title": meta["title"], "poster": meta["poster"], "description": meta["description"],
             "watch_servers": watch, "download_links": dl
         }
