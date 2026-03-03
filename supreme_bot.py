@@ -1,14 +1,11 @@
-
-
 import json
 import os
 import re
 import time
 import logging
 import base64
-import requests
-import cloudscraper
-from urllib.parse import urljoin, urlparse, parse_qs, unquote, quote
+from urllib.parse import urljoin, urlparse, parse_qs, unquote
+from curl_cffi import requests
 from bs4 import BeautifulSoup
 
 # ─── Logging Setup ──────────────────────────────────────────────
@@ -23,10 +20,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── Config ─────────────────────────────────────────────────────
-BASE_URL = "https://shahhed4u.net"
-# رابط قسم مسلسلات رمضان 2026
+BASE_URL = "https://shaaheid4u.net"
+# رابط قسم مسلسلات رمضان 2026 مباشرة
 RAMADAN_CATEGORIES = [
-    "https://shahhed4u.net/category/%D9%85%D8%B3%D9%84%D8%B3%D9%84%D8%A7%D8%AA-%D8%B1%D9%85%D8%B6%D8%A7%D9%86-2026"
+    "https://shaaheid4u.net/category/مسلسلات-رمضان-2026"
 ]
 MAX_PAGES = 7
 OUTPUT_FILE_BASE = "ramadan_2026_results"
@@ -56,60 +53,31 @@ processed_series = set()
 
 # ─── Session ────────────────────────────────────────────────────
 def get_session():
-    # cloudscraper يتجاوز Cloudflare JS challenge تلقائياً
-    sess = cloudscraper.create_scraper(
-        browser={
-            'browser': 'chrome',
-            'platform': 'windows',
-            'mobile': False
-        },
-        delay=10 # Higher delay to be safer
-    )
+    sess = requests.Session(impersonate="chrome120")
     sess.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
         "DNT": "1",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Cache-Control": "max-age=0",
     })
-    
-    # Homepage Warmup - Essential to get CF cookies correctly
-    logger.info("[SESSION] Establishing session with homepage warmup...")
-    try:
-        sess.get(BASE_URL + "/", timeout=20)
-        time.sleep(2)
-    except Exception as e:
-        logger.warning(f"[SESSION] Warmup failed: {e}")
-        
-    logger.info("[SESSION] Using cloudscraper with stealth headers")
     return sess
 
-def fetch(session, url, retries=3, referer=None):
-    # Encode URL to handle Arabic characters in headers (safeguard)
-    target_url = safe_encode_url(url)
-    
+def fetch(session, url, retries=3):
     for attempt in range(retries):
         try:
+            # إضافة تأخير بسيط لتجنب الحظر
             time.sleep(1.5)
-            headers = {"Referer": safe_encode_url(referer) if referer else (BASE_URL + "/")}
-            resp = session.get(target_url, timeout=30, allow_redirects=True, headers=headers)
-            if resp.status_code == 200:
+            resp = session.get(url, timeout=20, allow_redirects=True)
+            if resp.status_code == 200: 
                 return resp.text
             else:
                 logger.warning(f"Fetch {url} failed with status {resp.status_code} (Attempt {attempt+1}/{retries})")
                 if resp.status_code in (403, 503):
-                    wait = 15 * (attempt + 1)
-                    logger.info(f"[{resp.status_code}] Waiting {wait}s before retry...")
-                    time.sleep(wait)
+                    time.sleep(10)
         except Exception as e:
             logger.error(f"Fetch {url} error: {e} (Attempt {attempt+1}/{retries})")
-            time.sleep(3)
+            time.sleep(2)
     return None
 
 def abs_url(href):
@@ -118,20 +86,10 @@ def abs_url(href):
     if not href.startswith("http"):
         url = BASE_URL.rstrip("/") + "/" + href.lstrip("/")
     
-    # Normalize known mirror domains to the main scrape domain
-    for dom in ["shaaheid4u.net", "shhahiid4u.net", "shaaheed4u.net", "shhid4u.net"]:
-        url = url.replace(dom, "shahhed4u.net")
+    # Normalize domain to BASE_URL domain
+    for dom in ["shhahiid4u.net", "shaaheed4u.net", "shaaheid4u.net"]:
+        url = url.replace(dom, "shaaheid4u.net")
     return url
-
-def safe_encode_url(url):
-    """Encodes Arabic characters in URL path correctly without double-encoding"""
-    try:
-        p = urlparse(url)
-        # Unquote first to handle already encoded strings, then quote to ensure Arabic is encoded
-        clean_path = quote(unquote(p.path))
-        return f"{p.scheme}://{p.netloc}{clean_path}" + (f"?{p.query}" if p.query else "")
-    except:
-        return url
 
 # ─── Saving Logic ───────────────────────────────────────────────
 def get_latest_file_info():
@@ -178,40 +136,27 @@ def save_and_rotate(results, current_info):
 # ─── Extraction ─────────────────────────────────────────────────
 def extract_metadata(soup, url):
     meta = {"url": url, "title": "", "poster": "", "description": "", "year": "2026", "quality": "", "categories": []}
-    
-    # Title
     t = soup.find("meta", property="og:title")
-    if t:
-        meta["title"] = t.get("content", "").replace("مشاهدة ", "").replace("تحميل ", "").strip()
-    elif soup.title:
-        meta["title"] = soup.title.string.strip()
+    if t: meta["title"] = t.get("content", "").replace("مشاهدة ", "").strip()
+    elif soup.title: meta["title"] = soup.title.string.strip()
     
-    # Poster
     img = soup.find("meta", property="og:image")
-    if not img:
-        img = soup.select_one(".post-thumb img, .poster img, img[src*='/uploads/']")
+    if img: meta["poster"] = img.get("content", "")
     
-    if img:
-        meta["poster"] = abs_url(img.get("content") or img.get("src") or img.get("data-src"))
-    
-    # Description
     desc = soup.find("meta", property="og:description")
-    if not desc:
-        desc = soup.select_one(".story, .desc, .post-content")
+    if desc: meta["description"] = desc.get("content", "").strip()
     
-    if desc:
-        meta["description"] = desc.get("content", desc.get_text(strip=True)) if hasattr(desc, 'get') else desc.get_text(strip=True)
-
-    # Categories
+    # استخراج التصنيفات
     for c in soup.select(".categ, .category, .post-category a"):
         meta["categories"].append(c.get_text(strip=True))
 
-    # Series link from episode page
+    # محاولة العثور على رابط المسلسل من صفحة الحلقة
     series_link = soup.select_one('a[href*="/series/"], a[href*="/mosalsal/"], a[href*="/season/"], .breadcrumb a[href*="/series/"]')
     if not series_link:
+        # البحث عن نصوص معينة
         for a in soup.find_all("a", href=True):
             txt = a.get_text(strip=True)
-            if any(k in txt for k in ["جميع الحلقات", "كل الحلقات", "المسلسل"]):
+            if "جميع الحلقات" in txt or "كل الحلقات" in txt or "المسلسل" in txt:
                 series_link = a
                 break
     
@@ -220,12 +165,10 @@ def extract_metadata(soup, url):
     
     return meta
 
-def scrape_watch_links(session, url, referer):
-    html = fetch(session, url, referer=referer)
+def scrape_watch_links(session, url):
+    html = fetch(session, url)
     if not html: return []
     servers = []
-    
-    # Method 1: JSON.parse
     match = re.search(r"JSON\.parse\('(\[.*?\])'\)", html)
     if match:
         try:
@@ -233,48 +176,36 @@ def scrape_watch_links(session, url, referer):
             for s in json.loads(raw):
                 u = s.get("url", "")
                 if u:
+                    if u.startswith("/"): u = BASE_URL + u
                     servers.append({"name": s.get("name", "Server"), "url": abs_url(u)})
         except: pass
-    
-    # Method 2: Iframes and regular links
-    soup = BeautifulSoup(html, "html.parser")
     if not servers:
+        soup = BeautifulSoup(html, "html.parser")
         for iframe in soup.find_all("iframe"):
             src = iframe.get("src") or iframe.get("data-src")
-            if src and src.startswith("http") and not any(ex in src for ex in EXCLUDED_DOMAINS):
-                servers.append({"name": "Embed", "url": abs_url(src)})
-        
-        for a in soup.select(".servers a, .watch-servers a"):
-            href = a.get("href")
-            if href and not any(ex in href for ex in EXCLUDED_DOMAINS):
-                servers.append({"name": a.get_text(strip=True) or "Server", "url": abs_url(href)})
-
+            if src and src.startswith("https") and not any(ex in src for ex in EXCLUDED_DOMAINS):
+                servers.append({"name": "Embed", "url": src})
     return servers
 
 def scrape_episode_data(session, url):
     html = fetch(session, url)
     if not html: return [], []
     soup = BeautifulSoup(html, "html.parser")
-    
     w_url, d_url = None, None
     for a in soup.find_all("a", href=True):
         h = abs_url(a["href"])
         if h and "/watch/" in h: w_url = h
         elif h and "/download/" in h: d_url = h
-    
-    # Pass episode URL as referer to the watch page
-    watch = scrape_watch_links(session, w_url, url) if w_url else []
+    watch = scrape_watch_links(session, w_url) if w_url else []
     dl = []
-    
     if d_url:
-        d_html = fetch(session, d_url, referer=url)
+        d_html = fetch(session, d_url)
         if d_html:
             dsoup = BeautifulSoup(d_html, "html.parser")
-            for a in dsoup.select("a.btn-down, .servers a[href], .download-links a"):
+            for a in dsoup.select("a.btn-down, .servers a[href]"):
                 href = a.get("href")
-                if href and href.startswith("http") and not any(ex in href for ex in EXCLUDED_DOMAINS):
-                    name = a.get_text(strip=True) or "DL"
-                    dl.append({"name": name, "url": abs_url(href)})
+                if href and href.startswith("https") and not any(ex in href for ex in EXCLUDED_DOMAINS):
+                    dl.append({"name": a.get_text(strip=True) or "DL", "url": href})
     return watch, dl
 
 # ─── Process Item ───────────────────────────────────────────────
@@ -322,21 +253,18 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
             return
 
     def get_id(u, poster):
-        m = re.search(r'/(\d+)', poster or '')
+        m = re.search(r'/(\d+)', poster)
         return m.group(1) if m else str(abs(hash(u)))[:10]
 
     native_id = parent_id or get_id(url, meta['poster'])
     item_type = "series" if is_series else ("season" if is_season else ("movie" if "/film/" in url else "episode"))
-
-    # If it's an episode, the ID should match the parent_id as per user's example
-    display_id = native_id
 
     # حفظ المسلسل أو الموسم أو الفيلم
     if (is_series or is_season) and not parent_id:
         if url not in processed_series:
             logger.info(f"[*] SERIES/SEASON: {meta['title']}")
             results.append({
-                "id": display_id, "type": item_type, "title": meta["title"],
+                "id": native_id, "type": item_type, "title": meta["title"],
                 "poster": meta["poster"], "description": meta["description"], "url": url
             })
             processed_series.add(url)
@@ -446,7 +374,7 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
         ep_num = int(ep_match.group(1)) if ep_match else 0
 
         item = {
-            "id": display_id, "url": url, "type": "episode" if is_episode else "movie",
+            "id": native_id, "url": url, "type": "episode" if is_episode else "movie",
             "title": meta["title"], "poster": meta["poster"], "description": meta["description"],
             "watch_servers": watch, "download_links": dl
         }
@@ -489,36 +417,27 @@ def main():
         logger.info("=== [FINISH] UPDATE CHECK COMPLETED ===")
 
     for cat_url in RAMADAN_CATEGORIES:
+        curr = cat_url
         page_num = 1
-        logger.info(f"STARTING CATEGORY: {cat_url}")
-        while page_num <= MAX_PAGES:
-            # بناء رابط الصفحة باستخدام ?page=N
-            if page_num == 1:
-                curr = cat_url
-            else:
-                curr = f"{cat_url}?page={page_num}"
-            
-            logger.info(f"--- Processing Category Page {page_num} ({curr}) ---")
+        logger.info(f"STARTING CATEGORY: {curr}")
+        while curr and page_num <= MAX_PAGES:
+            logger.info(f"--- Processing Category Page {page_num} ---")
             html = fetch(session, curr)
-            if not html:
-                logger.info(f"No HTML for page {page_num}, stopping category.")
-                break
+            if not html: break
             soup = BeautifulSoup(html, "html.parser")
             links = []
-            for a in soup.select("a.show-card, .box-item a, article a, h2 a, .entry-title a"):
+            for a in soup.select("a.show-card, .box-item a, article a, h2 a"):
                 h = abs_url(a.get("href"))
                 if h and h not in links: links.append(h)
-            
-            if not links:
-                logger.info(f"No series links found on page {page_num}, stopping.")
-                break
-            
             for l in links:
                 process_item(session, l, results, seen_urls, force_ramadan=True)
             
             page_num += 1
+            next_btn = soup.select_one("a.next, .pagination .next a")
+            curr = abs_url(next_btn.get("href")) if next_btn else None
         
-        logger.info(f"Finished category. Processed {page_num - 1} page(s).")
+        if page_num > MAX_PAGES:
+            logger.info(f"Reached MAX_PAGES ({MAX_PAGES}). Stopping.")
 
 if __name__ == "__main__":
     main()

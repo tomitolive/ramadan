@@ -1,0 +1,5 @@
+venv_supreme/
+__pycache__/
+*.log
+*.stdout
+*.tmp
