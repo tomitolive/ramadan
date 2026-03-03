@@ -7,7 +7,8 @@ import time
 import logging
 import base64
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
-from curl_cffi import requests
+import requests
+import cloudscraper
 from bs4 import BeautifulSoup
 
 # ─── Logging Setup ──────────────────────────────────────────────
@@ -55,31 +56,38 @@ processed_series = set()
 
 # ─── Session ────────────────────────────────────────────────────
 def get_session():
-    sess = requests.Session(impersonate="chrome120")
+    # cloudscraper يتجاوز Cloudflare JS challenge تلقائياً
+    sess = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'mobile': False
+        }
+    )
     sess.headers.update({
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
         "DNT": "1",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
+        "Referer": BASE_URL + "/",
     })
+    logger.info("[SESSION] Using cloudscraper (Cloudflare bypass)")
     return sess
 
 def fetch(session, url, retries=3):
     for attempt in range(retries):
         try:
-            # إضافة تأخير بسيط لتجنب الحظر
             time.sleep(1.5)
-            resp = session.get(url, timeout=20, allow_redirects=True)
-            if resp.status_code == 200: 
+            resp = session.get(url, timeout=30, allow_redirects=True)
+            if resp.status_code == 200:
                 return resp.text
             else:
                 logger.warning(f"Fetch {url} failed with status {resp.status_code} (Attempt {attempt+1}/{retries})")
                 if resp.status_code in (403, 503):
-                    time.sleep(10)
+                    wait = 15 * (attempt + 1)
+                    logger.info(f"[{resp.status_code}] Waiting {wait}s before retry...")
+                    time.sleep(wait)
         except Exception as e:
             logger.error(f"Fetch {url} error: {e} (Attempt {attempt+1}/{retries})")
-            time.sleep(2)
+            time.sleep(3)
     return None
 
 def abs_url(href):
