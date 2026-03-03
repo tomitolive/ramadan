@@ -124,11 +124,12 @@ def abs_url(href):
     return url
 
 def safe_encode_url(url):
-    """Encodes Arabic characters in URL path to avoid header encoding errors"""
+    """Encodes Arabic characters in URL path correctly without double-encoding"""
     try:
         p = urlparse(url)
-        path = quote(p.path)
-        return f"{p.scheme}://{p.netloc}{path}" + (f"?{p.query}" if p.query else "")
+        # Unquote first to handle already encoded strings, then quote to ensure Arabic is encoded
+        clean_path = quote(unquote(p.path))
+        return f"{p.scheme}://{p.netloc}{clean_path}" + (f"?{p.query}" if p.query else "")
     except:
         return url
 
