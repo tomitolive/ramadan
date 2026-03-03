@@ -42,12 +42,12 @@ jobs:
           # Stage JSON output files and the log
           git add ramadan_2026_results_*.json supreme_bot.log || true
 
-          # Rebase against remote main to avoid conflicts with existing repo code
-          git pull --rebase origin main
-
-          # Commit — exit 0 gracefully if there's nothing new to commit
+          # Commit FIRST (before rebase) — rebase fails if index has staged changes
           git commit -m "chore: update scraped data [$(date -u '+%Y-%m-%d %H:%M UTC')]" \
             || echo "Nothing to commit — no new data this run."
+
+          # NOW safe to rebase — working tree is clean
+          git pull --rebase origin main
 
           git push origin main
         env:
