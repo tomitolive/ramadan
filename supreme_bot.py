@@ -22,10 +22,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── Config ─────────────────────────────────────────────────────
-BASE_URL = "https://shaaheid4u.net"
-# رابط قسم مسلسلات رمضان 2026 مباشرة
+BASE_URL = "https://shahhed4u.net"
+# رابط قسم مسلسلات رمضان 2026
 RAMADAN_CATEGORIES = [
-    "https://shaaheid4u.net/category/مسلسلات-رمضان-2026"
+    "https://shahhed4u.net/category/%D9%85%D8%B3%D9%84%D8%B3%D9%84%D8%A7%D8%AA-%D8%B1%D9%85%D8%B6%D8%A7%D9%86-2026"
 ]
 MAX_PAGES = 7
 OUTPUT_FILE_BASE = "ramadan_2026_results"
@@ -54,60 +54,32 @@ global_file_state = {'filename': f"{OUTPUT_FILE_BASE}_1.json", 'part': 1}
 processed_series = set()
 
 # ─── Session ────────────────────────────────────────────────────
-import random
-
-_IMPERSONATE_PROFILES = ["chrome120", "chrome131", "chrome124"]
-
 def get_session():
-    profile = random.choice(_IMPERSONATE_PROFILES)
-    sess = requests.Session(impersonate=profile)
+    sess = requests.Session(impersonate="chrome120")
     sess.headers.update({
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "ar-MA,ar;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
         "DNT": "1",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
-        "Cache-Control": "max-age=0",
-        "sec-ch-ua": '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
     })
-    logger.info(f"[SESSION] Using impersonation profile: {profile}")
-    # Warm-up: visit homepage first to get a valid session cookie
-    try:
-        logger.info(f"[SESSION] Warming up with homepage visit...")
-        time.sleep(2)
-        sess.get(BASE_URL, timeout=20, allow_redirects=True)
-        time.sleep(3)
-    except Exception as e:
-        logger.warning(f"[SESSION] Warm-up failed (non-fatal): {e}")
     return sess
 
 def fetch(session, url, retries=3):
     for attempt in range(retries):
         try:
-            time.sleep(2 + random.uniform(0.5, 2.0))  # jitter لتجنب patterns ثابتة
-            # أضف Referer من BASE_URL لتقليد تصفح طبيعي
-            headers = {"Referer": BASE_URL + "/"}
-            resp = session.get(url, timeout=30, allow_redirects=True, headers=headers)
-            if resp.status_code == 200:
+            # إضافة تأخير بسيط لتجنب الحظر
+            time.sleep(1.5)
+            resp = session.get(url, timeout=20, allow_redirects=True)
+            if resp.status_code == 200: 
                 return resp.text
             else:
                 logger.warning(f"Fetch {url} failed with status {resp.status_code} (Attempt {attempt+1}/{retries})")
-                if resp.status_code == 403:
-                    wait = 45 * (attempt + 1)  # 45s, 90s, 135s
-                    logger.info(f"[403] Waiting {wait}s before retry...")
-                    time.sleep(wait)
-                elif resp.status_code == 503:
-                    time.sleep(30)
+                if resp.status_code in (403, 503):
+                    time.sleep(10)
         except Exception as e:
             logger.error(f"Fetch {url} error: {e} (Attempt {attempt+1}/{retries})")
-            time.sleep(5)
+            time.sleep(2)
     return None
 
 def abs_url(href):
@@ -116,9 +88,9 @@ def abs_url(href):
     if not href.startswith("http"):
         url = BASE_URL.rstrip("/") + "/" + href.lstrip("/")
     
-    # Normalize domain to BASE_URL domain
-    for dom in ["shhahiid4u.net", "shaaheed4u.net", "shaaheid4u.net"]:
-        url = url.replace(dom, "shaaheid4u.net")
+    # Normalize known mirror domains to the main scrape domain
+    for dom in ["shaaheid4u.net", "shhahiid4u.net", "shaaheed4u.net", "shhid4u.net"]:
+        url = url.replace(dom, "shahhed4u.net")
     return url
 
 # ─── Saving Logic ───────────────────────────────────────────────
@@ -447,27 +419,36 @@ def main():
         logger.info("=== [FINISH] UPDATE CHECK COMPLETED ===")
 
     for cat_url in RAMADAN_CATEGORIES:
-        curr = cat_url
         page_num = 1
-        logger.info(f"STARTING CATEGORY: {curr}")
-        while curr and page_num <= MAX_PAGES:
-            logger.info(f"--- Processing Category Page {page_num} ---")
+        logger.info(f"STARTING CATEGORY: {cat_url}")
+        while page_num <= MAX_PAGES:
+            # بناء رابط الصفحة باستخدام ?page=N
+            if page_num == 1:
+                curr = cat_url
+            else:
+                curr = f"{cat_url}?page={page_num}"
+            
+            logger.info(f"--- Processing Category Page {page_num} ({curr}) ---")
             html = fetch(session, curr)
-            if not html: break
+            if not html:
+                logger.info(f"No HTML for page {page_num}, stopping category.")
+                break
             soup = BeautifulSoup(html, "html.parser")
             links = []
-            for a in soup.select("a.show-card, .box-item a, article a, h2 a"):
+            for a in soup.select("a.show-card, .box-item a, article a, h2 a, .entry-title a"):
                 h = abs_url(a.get("href"))
                 if h and h not in links: links.append(h)
+            
+            if not links:
+                logger.info(f"No series links found on page {page_num}, stopping.")
+                break
+            
             for l in links:
                 process_item(session, l, results, seen_urls, force_ramadan=True)
             
             page_num += 1
-            next_btn = soup.select_one("a.next, .pagination .next a")
-            curr = abs_url(next_btn.get("href")) if next_btn else None
         
-        if page_num > MAX_PAGES:
-            logger.info(f"Reached MAX_PAGES ({MAX_PAGES}). Stopping.")
+        logger.info(f"Finished category. Processed {page_num - 1} page(s).")
 
 if __name__ == "__main__":
     main()
