@@ -1,0 +1,54 @@
+name: Ramadan Scraper Auto-Sync
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # Runs every 6 hours
+  workflow_dispatch:          # Allow manual trigger from GitHub UI
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360      # 6-hour hard cap — gives the ~4h script plenty of room
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # Full history needed for clean rebases
+
+      # ── 2. Python ──────────────────────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      # ── 3. Dependencies ────────────────────────────────────────────────────
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Run the bot ─────────────────────────────────────────────────────
+      - name: Run Supreme Bot
+        continue-on-error: true   # Partial-data recovery: keep going even on failure/timeout
+        run: python supreme_bot.py
+
+      # ── 5. Commit & Push (always runs) ─────────────────────────────────────
+      - name: Commit and Push Results
+        if: always()              # Executes whether the bot succeeded or failed
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # Stage JSON output files and the log
+          git add ramadan_2026_results_*.json supreme_bot.log || true
+
+          # Rebase against remote main to avoid conflicts with existing repo code
+          git pull --rebase origin main
+
+          # Commit — exit 0 gracefully if there's nothing new to commit
+          git commit -m "chore: update scraped data [$(date -u '+%Y-%m-%d %H:%M UTC')]" \
+            || echo "Nothing to commit — no new data this run."
+
+          git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
