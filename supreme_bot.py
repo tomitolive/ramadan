@@ -54,32 +54,60 @@ global_file_state = {'filename': f"{OUTPUT_FILE_BASE}_1.json", 'part': 1}
 processed_series = set()
 
 # ─── Session ────────────────────────────────────────────────────
+import random
+
+_IMPERSONATE_PROFILES = ["chrome120", "chrome131", "chrome124"]
+
 def get_session():
-    sess = requests.Session(impersonate="chrome120")
+    profile = random.choice(_IMPERSONATE_PROFILES)
+    sess = requests.Session(impersonate=profile)
     sess.headers.update({
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "ar-MA,ar;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
         "DNT": "1",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "max-age=0",
+        "sec-ch-ua": '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
     })
+    logger.info(f"[SESSION] Using impersonation profile: {profile}")
+    # Warm-up: visit homepage first to get a valid session cookie
+    try:
+        logger.info(f"[SESSION] Warming up with homepage visit...")
+        time.sleep(2)
+        sess.get(BASE_URL, timeout=20, allow_redirects=True)
+        time.sleep(3)
+    except Exception as e:
+        logger.warning(f"[SESSION] Warm-up failed (non-fatal): {e}")
     return sess
 
 def fetch(session, url, retries=3):
     for attempt in range(retries):
         try:
-            # إضافة تأخير بسيط لتجنب الحظر
-            time.sleep(1.5)
-            resp = session.get(url, timeout=20, allow_redirects=True)
-            if resp.status_code == 200: 
+            time.sleep(2 + random.uniform(0.5, 2.0))  # jitter لتجنب patterns ثابتة
+            # أضف Referer من BASE_URL لتقليد تصفح طبيعي
+            headers = {"Referer": BASE_URL + "/"}
+            resp = session.get(url, timeout=30, allow_redirects=True, headers=headers)
+            if resp.status_code == 200:
                 return resp.text
             else:
                 logger.warning(f"Fetch {url} failed with status {resp.status_code} (Attempt {attempt+1}/{retries})")
-                if resp.status_code in (403, 503):
-                    time.sleep(10)
+                if resp.status_code == 403:
+                    wait = 45 * (attempt + 1)  # 45s, 90s, 135s
+                    logger.info(f"[403] Waiting {wait}s before retry...")
+                    time.sleep(wait)
+                elif resp.status_code == 503:
+                    time.sleep(30)
         except Exception as e:
             logger.error(f"Fetch {url} error: {e} (Attempt {attempt+1}/{retries})")
-            time.sleep(2)
+            time.sleep(5)
     return None
 
 def abs_url(href):
