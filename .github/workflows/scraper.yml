@@ -9,6 +9,8 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     timeout-minutes: 360      # 6-hour hard cap — gives the ~4h script plenty of room
+    permissions:
+      contents: write
 
     steps:
       # ── 1. Checkout ────────────────────────────────────────────────────────
@@ -39,8 +41,8 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          # Stage JSON output files and the log
-          git add ramadan_2026_results_*.json supreme_bot.log || true
+          # Stage JSON output files
+          git add ramadan_2026_results_*.json || true
 
           # Commit FIRST (before rebase) — rebase fails if index has staged changes
           git commit -m "chore: update scraped data [$(date -u '+%Y-%m-%d %H:%M UTC')]" \
