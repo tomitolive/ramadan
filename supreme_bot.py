@@ -3,7 +3,7 @@ import os
 import re
 import time
 import logging
-import base64
+import argparse
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 from curl_cffi import requests
 from bs4 import BeautifulSoup
@@ -21,11 +21,11 @@ logger = logging.getLogger(__name__)
 
 # ─── Config ─────────────────────────────────────────────────────
 BASE_URL = "https://shaaheid4u.net"
-# رابط قسم مسلسلات رمضان 2026 مباشرة
 RAMADAN_CATEGORIES = [
     "https://shaaheid4u.net/category/مسلسلات-رمضان-2026"
 ]
-MAX_PAGES = 3
+DEFAULT_MAX_PAGES = 3
+FULL_MAX_PAGES = 50
 OUTPUT_FILE_BASE = "ramadan_2026_results"
 FILE_SIZE_LIMIT = 10 * 1024 * 1024  # 10MB
 TARGET_PROVIDERS = [
@@ -66,7 +66,6 @@ def get_session():
 def fetch(session, url, retries=3):
     for attempt in range(retries):
         try:
-            # إضافة تأخير بسيط لتجنب الحظر
             time.sleep(1.5)
             resp = session.get(url, timeout=20, allow_redirects=True)
             if resp.status_code == 200: 
@@ -86,14 +85,12 @@ def abs_url(href):
     if not href.startswith("http"):
         url = BASE_URL.rstrip("/") + "/" + href.lstrip("/")
     
-    # Normalize domain to BASE_URL domain
     for dom in ["shhahiid4u.net", "shaaheed4u.net", "shaaheid4u.net"]:
         url = url.replace(dom, "shaaheid4u.net")
     return url
 
 # ─── Saving Logic ───────────────────────────────────────────────
 def get_latest_file_info():
-    """يرجع المسار الحالي، الجزء الحالي، والبيانات المحملة"""
     part = 1
     while os.path.exists(f"{OUTPUT_FILE_BASE}_{part}.json"):
         if os.path.getsize(f"{OUTPUT_FILE_BASE}_{part}.json") < FILE_SIZE_LIMIT:
@@ -120,7 +117,6 @@ def atomic_save(filename, data):
         logger.error(f"Error saving {filename}: {e}")
 
 def save_and_rotate(results, current_info):
-    """حفظ النتائج وتغيير الملف إذا تجاوز 10MB"""
     filename, part = current_info
     atomic_save(filename, results)
     
@@ -128,7 +124,6 @@ def save_and_rotate(results, current_info):
         logger.info(f"!!! File {filename} reached 10MB. Starting new part...")
         new_part = part + 1
         new_filename = f"{OUTPUT_FILE_BASE}_{new_part}.json"
-        # تصفية القائمة لبدء ملف جديد
         results.clear()
         return new_filename, new_part
     return filename, part
@@ -146,14 +141,11 @@ def extract_metadata(soup, url):
     desc = soup.find("meta", property="og:description")
     if desc: meta["description"] = desc.get("content", "").strip()
     
-    # استخراج التصنيفات
     for c in soup.select(".categ, .category, .post-category a"):
         meta["categories"].append(c.get_text(strip=True))
 
-    # محاولة العثور على رابط المسلسل من صفحة الحلقة
     series_link = soup.select_one('a[href*="/series/"], a[href*="/mosalsal/"], a[href*="/season/"], .breadcrumb a[href*="/series/"]')
     if not series_link:
-        # البحث عن نصوص معينة
         for a in soup.find_all("a", href=True):
             txt = a.get_text(strip=True)
             if "جميع الحلقات" in txt or "كل الحلقات" in txt or "المسلسل" in txt:
@@ -212,18 +204,15 @@ def scrape_episode_data(session, url):
 def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan=False):
     global global_file_state
     
-    # السماح للمسلسلات بالدخول حتى لو شوهدت في قائمة الفئات
     is_series = "/series/" in url or "/mosalsal/" in url
     is_season = "/season/" in url
     
     if url in seen_urls:
         if (is_series or is_season):
-            # نستمر لمعالجة المسلسل للتأكد من وجود جميع الحلقات (تحديث)
             logger.info(f"   [UPDATE] Checking for new episodes in: {url}")
         else:
             return
 
-    # تتبع التنفيذ
     logger.info(f"==> {url}")
     html = fetch(session, url)
     if not html: 
@@ -232,18 +221,15 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
     soup = BeautifulSoup(html, "html.parser")
     meta = extract_metadata(soup, url)
 
-    # فلترة رمضان 2026
     is_ramadan = force_ramadan or any("رمضان 2026" in c for c in meta['categories']) or "رمضان 2026" in meta['title']
     if not is_ramadan and not parent_id:
         logger.info(f"   [SKIP] Not Ramadan 2026: {meta['title']}")
-        # لا نقوم بإضافة الرابط لـ seen_urls هنا لنسمح للمحاولات الأخرى (عبر التوجيه) بالدخول
         return
 
     is_series = "/series/" in url or "/mosalsal/" in url
     is_season = "/season/" in url
     is_episode = "/episode/" in url or "/ep-" in url
 
-    # إذا كانت حلقة، حاول الوصول للمسلسل أولاً
     if is_episode and meta.get("series_url") and meta["series_url"] not in processed_series and meta["series_url"] != url:
         logger.info(f"   [REDIRECT] episode -> series: {meta['series_url']}")
         process_item(session, meta["series_url"], results, seen_urls, force_ramadan=is_ramadan)
@@ -259,7 +245,6 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
     native_id = parent_id or get_id(url, meta['poster'])
     item_type = "series" if is_series else ("season" if is_season else ("movie" if "/film/" in url else "episode"))
 
-    # حفظ المسلسل أو الموسم أو الفيلم
     if (is_series or is_season) and not parent_id:
         if url not in processed_series:
             logger.info(f"[*] SERIES/SEASON: {meta['title']}")
@@ -273,21 +258,18 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
         else:
             logger.info(f"[*] UPDATING SERIES/SEASON: {meta['title']}")
 
-        # جمع الأبناء (حلقات أو مواسم)
         child_urls = []
         curr = url
         while curr:
             pg = fetch(session, curr) if curr != url else html
             if not pg: break
             ps = BeautifulSoup(pg, "html.parser")
-            # البحث عن الروابط في الكروت والشبكة أولاً
             for a in ps.select(".show-card, .box-item a, .ep-card a, .season-card a, .breadcrumb a"):
                 f = abs_url(a.get("href"))
                 if f and f not in seen_urls and ("/episode/" in f or "/ep-" in f or "/season/" in f or "/mosalsal/" in f or "/series/" in f):
                     if f == url: continue
                     if f not in child_urls: child_urls.append(f)
             
-            # إذا لم يجد شيئاً، ابحث في كل الروابط
             if not child_urls:
                 for a in ps.find_all("a", href=True):
                     f = abs_url(a.get("href"))
@@ -298,14 +280,12 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
             next_btn = ps.select_one("a.next, .pagination .next a")
             curr = abs_url(next_btn.get("href")) if next_btn else None
 
-        # Filter for latest season if multiple exist
         seasons = [u for u in child_urls if "/season/" in u]
         if seasons:
             def get_season_num(u):
                 last_part = unquote(u.rstrip('/').split('/')[-1])
                 nums = re.findall(r'(\d+)', last_part)
                 if nums: return int(nums[-1])
-                # Fallback to title check if URL doesn't have a clear number
                 if "الاول" in last_part: return 1
                 if "الثاني" in last_part: return 2
                 if "الثالث" in last_part: return 3
@@ -313,10 +293,8 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
             
             latest_season = max(seasons, key=get_season_num)
             logger.info(f"   [FILTER] Multiple seasons found ({len(seasons)}). Selecting latest: {latest_season}")
-            # Keep ONLY the latest season URL. Standalone episodes are usually included in the season.
             child_urls = [latest_season]
         else:
-            # ترتيب الحلقات رقمياً بشكل دقيق إذا لم تكن هناك مواسم
             def sort_k(x):
                 parts = x.rstrip('/').split('/')
                 last_part = unquote(parts[-1])
@@ -331,10 +309,8 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
             process_item(session, c, results, seen_urls, native_id, force_ramadan=True)
         return
 
-    # معالجة حلقة أو فيلماً أو موسماً (كطفل)
     if is_episode or "/film/" in url or is_season:
         if is_season:
-            # إذا كان موسماً داخل مسلسل، نوسعه أيضاً
             child_urls = []
             curr = url
             while curr:
@@ -367,9 +343,7 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
                 process_item(session, c, results, seen_urls, parent_id, force_ramadan=True)
             return
 
-        # معالجة حلقة واحدة
         watch, dl = scrape_episode_data(session, url)
-        # استخراج رقم الحلقة من العنوان لترتيب أفضل في الـ JSON إذا لزم الأمر
         ep_match = re.search(r'الحلقة\s+(\d+)', meta['title'])
         ep_num = int(ep_match.group(1)) if ep_match else 0
 
@@ -386,13 +360,16 @@ def process_item(session, url, results, seen_urls, parent_id=None, force_ramadan
         logger.info(f"   [OK] {meta['title']}")
 
 def main():
+    parser = argparse.ArgumentParser(description="Supreme Bot - Ramadan Scraper")
+    parser.add_argument("--mode", choices=["full", "updates"], default="updates", help="Scraping mode: full crawl or update check")
+    args = parser.parse_args()
+
     global global_file_state
     session = get_session()
     filename, part, results = get_latest_file_info()
     global_file_state = {'filename': filename, 'part': part}
     seen_urls = set()
     
-    # تحميل التاريخ
     p = 1
     while os.path.exists(f"{OUTPUT_FILE_BASE}_{p}.json"):
         try:
@@ -405,39 +382,42 @@ def main():
         except: pass
         p += 1
 
-    # جديد: التحقق من وجود حلقات جديدة للمسلسلات الموجودة مسبقاً قبل بدء الكشط العادي
+    # استراتيجية التشغيل بناءً على الوضع
+    logger.info(f"=== [MODE: {args.mode.upper()}] Starting Scraper ===")
+
+    # دائماً نتحقق من تحديثات المسلسلات الموجودة (في كلا الوضعين)
     if processed_series:
         logger.info(f"=== [START] CHECKING FOR UPDATES IN {len(processed_series)} EXISTING SERIES ===")
-        # نحولها لقائمة لتجنب مشاكل التغيير أثناء الدوران إذا حدث
         series_to_check = list(processed_series)
         for s_url in series_to_check:
-            logger.info(f"Checking update for: {s_url}")
-            # استدعاء process_item للمسلسل سيقوم بالتنقيب عن حلقات جديدة
             process_item(session, s_url, results, seen_urls, force_ramadan=True)
         logger.info("=== [FINISH] UPDATE CHECK COMPLETED ===")
 
-    for cat_url in RAMADAN_CATEGORIES:
-        curr = cat_url
-        page_num = 1
-        logger.info(f"STARTING CATEGORY: {curr}")
-        while curr and page_num <= MAX_PAGES:
-            logger.info(f"--- Processing Category Page {page_num} ---")
-            html = fetch(session, curr)
-            if not html: break
-            soup = BeautifulSoup(html, "html.parser")
-            links = []
-            for a in soup.select("a.show-card, .box-item a, article a, h2 a"):
-                h = abs_url(a.get("href"))
-                if h and h not in links: links.append(h)
-            for l in links:
-                process_item(session, l, results, seen_urls, force_ramadan=True)
+    # في وضع "full" فقط، نقوم بمسح كامل للفئات
+    if args.mode == "full":
+        max_p = FULL_MAX_PAGES
+        for cat_url in RAMADAN_CATEGORIES:
+            curr = cat_url
+            page_num = 1
+            logger.info(f"STARTING CATEGORY CRAWL: {curr}")
+            while curr and page_num <= max_p:
+                logger.info(f"--- Processing Category Page {page_num}/{max_p} ---")
+                html = fetch(session, curr)
+                if not html: break
+                soup = BeautifulSoup(html, "html.parser")
+                links = []
+                for a in soup.select("a.show-card, .box-item a, article a, h2 a"):
+                    h = abs_url(a.get("href"))
+                    if h and h not in links: links.append(h)
+                for l in links:
+                    process_item(session, l, results, seen_urls, force_ramadan=True)
+                
+                page_num += 1
+                next_btn = soup.select_one("a.next, .pagination .next a")
+                curr = abs_url(next_btn.get("href")) if next_btn else None
             
-            page_num += 1
-            next_btn = soup.select_one("a.next, .pagination .next a")
-            curr = abs_url(next_btn.get("href")) if next_btn else None
-        
-        if page_num > MAX_PAGES:
-            logger.info(f"Reached MAX_PAGES ({MAX_PAGES}). Stopping.")
+            if page_num > max_p:
+                logger.info(f"Reached FULL_MAX_PAGES ({max_p}). Stopping category crawl.")
 
 if __name__ == "__main__":
     main()

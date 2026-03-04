@@ -1,0 +1,47 @@
+name: Ramadan Full Scrape (6H)
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # Runs every 6 hours
+  workflow_dispatch:
+
+concurrency:
+  group: scraper-sync
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Full Scrape
+        continue-on-error: true
+        run: python supreme_bot.py --mode full
+
+      - name: Commit and Push Results
+        if: always()
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add ramadan_2026_results_*.json || true
+          git commit -m "chore: 6-hourly full category scrape [$(date -u '+%Y-%m-%d %H:%M UTC')]" || echo "No changes found."
+          git pull --rebase origin main
+          git push origin main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
