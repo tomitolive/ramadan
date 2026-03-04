@@ -25,7 +25,7 @@ BASE_URL = "https://shaaheid4u.net"
 RAMADAN_CATEGORIES = [
     "https://shaaheid4u.net/category/مسلسلات-رمضان-2026"
 ]
-MAX_PAGES = 7
+MAX_PAGES = 3
 OUTPUT_FILE_BASE = "ramadan_2026_results"
 FILE_SIZE_LIMIT = 10 * 1024 * 1024  # 10MB
 TARGET_PROVIDERS = [

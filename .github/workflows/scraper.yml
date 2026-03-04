@@ -2,13 +2,17 @@ name: Ramadan Scraper Auto-Sync
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # Runs every 6 hours
+    - cron: '*/5 * * * *'   # Runs every 5 minutes
   workflow_dispatch:          # Allow manual trigger from GitHub UI
+
+concurrency:
+  group: scraper-sync
+  cancel-in-progress: false
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 360      # 6-hour hard cap — gives the ~4h script plenty of room
+    timeout-minutes: 60      # Reduced timeout for more frequent runs
     permissions:
       contents: write
 
