@@ -32,14 +32,14 @@ jobs:
 
       - name: Run Full Scrape
         continue-on-error: true
-        run: python supreme_bot.py --mode full
+        run: python run_all.py --mode full --pages 50
 
       - name: Commit and Push Results
         if: always()
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add ramadan_2026_results_*.json || true
+          git add bots/*/data/*.json || true
           git commit -m "chore: 6-hourly full category scrape [$(date -u '+%Y-%m-%d %H:%M UTC')]" || echo "No changes found."
           git pull --rebase origin main
           git push origin main

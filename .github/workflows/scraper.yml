@@ -33,10 +33,10 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. Run the bot ─────────────────────────────────────────────────────
-      - name: Run Supreme Bot
-        continue-on-error: true   # Partial-data recovery: keep going even on failure/timeout
-        run: python supreme_bot.py
+      # ── 4. Run the bots ────────────────────────────────────────────────────
+      - name: Run Multi-Bot Scraper
+        continue-on-error: true
+        run: python run_all.py --mode updates
 
       # ── 5. Commit & Push (always runs) ─────────────────────────────────────
       - name: Commit and Push Results
@@ -45,8 +45,8 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          # Stage JSON output files
-          git add ramadan_2026_results_*.json || true
+          # Stage JSON output files from all bots
+          git add bots/*/data/*.json || true
 
           # Commit FIRST (before rebase) — rebase fails if index has staged changes
           git commit -m "chore: update scraped data [$(date -u '+%Y-%m-%d %H:%M UTC')]" \
