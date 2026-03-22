@@ -1,4 +1,4 @@
-name: Ramadan Scraper Auto-Sync
+name: Multi-Bot Scraper Auto-Sync
 
 on:
   schedule:
