@@ -1,8 +1,8 @@
 import json
 import os
 import re
-import time
 import logging
+import random
 import argparse
 from urllib.parse import unquote
 from bs4 import BeautifulSoup
@@ -341,6 +341,8 @@ class BaseScraper:
                         h = abs_url(a.get("href"))
                         if h and h not in links: links.append(h)
                     for l in links:
+                        # Random delay between items
+                        time.sleep(random.uniform(1.5, 4.0))
                         self.process_item(l, results)
                     
                     page_num += 1
