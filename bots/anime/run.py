@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 from core.scraper import BaseScraper
 
 if __name__ == "__main__":
-    CATEGORIES = ["https://shaaheid4u.net/category/انمي-وكرتون"]
+    CATEGORIES = ["https://web32218x.faselhdx.bid/anime"]
     bot = BaseScraper(
         name="Anime",
         categories=CATEGORIES,

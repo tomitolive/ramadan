@@ -2,7 +2,7 @@ import time
 import logging
 
 # ─── Config ─────────────────────────────────────────────────────
-BASE_URL = "https://shaaheid4u.net"
+BASE_URL = "https://web32218x.faselhdx.bid"
 
 TARGET_PROVIDERS = [
     'fsdcmo', 'vinovo', 'mixdrop', 'doodstream', 'dood', 'streamwish',
@@ -39,7 +39,7 @@ USER_AGENTS = [
 
 def get_session():
     # Use a random browser fingerprint to avoid detection
-    browser = random.choice(['chrome', 'firefox', 'opera', 'edge'])
+    browser = random.choice(['chrome', 'firefox'])
     return cloudscraper.create_scraper(
         browser={'browser': browser, 'platform': 'windows', 'mobile': False}
     )
@@ -76,6 +76,10 @@ def abs_url(href, base=BASE_URL):
     if not href.startswith("http"):
         url = base.rstrip("/") + "/" + href.lstrip("/")
     
-    for dom in ["shhahiid4u.net", "shaaheed4u.net", "shaaheid4u.net"]:
-        url = url.replace(dom, "shaaheid4u.net")
+    for dom in ["shhahiid4u.net", "shaaheed4u.net", "shaaheid4u.net", "faselhd.club", "faselhd.pro", "fasel-hd.cam"]:
+        url = url.replace(dom, "web32218x.faselhdx.bid")
+    
+    # Special case for 'faselhd' without extension, avoid replacing if already new domain
+    if "faselhd" in url and "web32218x.faselhdx.bid" not in url:
+        url = url.replace("faselhd", "web32218x.faselhdx.bid")
     return url

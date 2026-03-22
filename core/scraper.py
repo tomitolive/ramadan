@@ -93,25 +93,39 @@ class BaseScraper:
         if t: meta["title"] = t.get("content", "").replace("مشاهدة ", "").strip()
         elif soup.title: meta["title"] = soup.title.string.strip()
         
-        img = soup.find("meta", property="og:image")
-        if img: meta["poster"] = img.get("content", "")
+        img = soup.find("meta", property="og:image") or soup.select_one('meta[itemprop="image"]') or soup.select_one(".posterImg img")
+        if img: meta["poster"] = img.get("content") or img.get("src") or ""
         
-        desc = soup.find("meta", property="og:description")
-        if desc: meta["description"] = desc.get("content", "").strip()
+        desc = soup.find("meta", property="og:description") or soup.select_one('meta[name="description"]') or soup.select_one(".singleDesc")
+        if desc: meta["description"] = desc.get("content") or desc.get_text(strip=True) or ""
         
-        for c in soup.select(".categ, .category, .post-category a"):
+        for c in soup.select(".categ, .category, .post-category a, .tax_al-movie-cat a, .tax_al-series-cat a, .singleInfo a[href*='-cats'], .postInner .cat"):
             meta["categories"].append(c.get_text(strip=True))
 
-        series_link = soup.select_one('a[href*="/series/"], a[href*="/mosalsal/"], a[href*="/season/"], .breadcrumb a[href*="/series/"]')
-        if not series_link:
+        q_link = soup.select_one(".singleInfo a[href*='quality'], .posTop .quality")
+        if q_link: meta["quality"] = q_link.get_text(strip=True)
+
+        year_icon = soup.select_one(".singleInfo i.fa-calendar-alt")
+        if year_icon and year_icon.parent:
+            txt = year_icon.parent.get_text(strip=True)
+            if ":" in txt: meta["year"] = txt.split(":")[-1].strip()
+            else: meta["year"] = txt.replace("موعد الصدور", "").strip()
+
+        series_link = soup.select_one('a[href*="/series/"]:not([href$="/series/"]):not([href$="/series"]), a[href*="/mosalsal/"]:not([href$="/mosalsal/"]):not([href$="/mosalsal"]), a[href*="/season/"], a[href*="/anime/"]:not([href$="/anime/"]):not([href$="/anime"]), .breadcrumb a[href*="/series/"]')
+        if not series_link or series_link.get("href") == "#":
             for a in soup.find_all("a", href=True):
                 txt = a.get_text(strip=True)
-                if "جميع الحلقات" in txt or "كل الحلقات" in txt or "المسلسل" in txt:
+                if ("جميع الحلقات" in txt or "كل الحلقات" in txt or "المسلسل" in txt) and a.get("href") != "#":
                     series_link = a
                     break
         
-        if series_link:
+        if series_link and series_link.get("href") != "#":
             meta["series_url"] = abs_url(series_link.get("href"))
+        
+        # Fallback for Anime category
+        if not meta.get("series_url") and "/anime-episodes/" in url:
+            # Try to find link to series in the same directory structure
+            pass
         
         return meta
 
@@ -119,43 +133,70 @@ class BaseScraper:
         html = fetch(self.session, url)
         if not html: return []
         servers = []
-        match = re.search(r"JSON\.parse\('(\[.*?\])'\)", html)
-        if match:
-            try:
-                raw = re.sub(r'\\u([0-9a-fA-F]{4})', lambda m: chr(int(m.group(1), 16)), match.group(1))
-                for s in json.loads(raw):
-                    u = s.get("url", "")
-                    if u:
-                        if u.startswith("/"): u = BASE_URL + u
-                        servers.append({"name": s.get("name", "Server"), "url": abs_url(u)})
-            except: pass
+        soup = BeautifulSoup(html, "html.parser")
+        
+        # New site servers list
+        for li in soup.select("ul.tabs-ul li"):
+            name = li.get_text(strip=True)
+            oc = li.get("onclick", "")
+            m = re.search(r"location\.href\s*=\s*['\"]([^'\"]+)['\"]", oc)
+            if m:
+                servers.append({"name": name, "url": abs_url(m.group(1))})
+
+        # Iframe fallback
+        iframe = soup.select_one('iframe[name="player_iframe"]')
+        if iframe:
+            src = iframe.get("src") or iframe.get("data-src")
+            if src and src.startswith("http") and not any(ex in src for ex in EXCLUDED_DOMAINS):
+                if not any(s["url"] == src for s in servers):
+                    servers.append({"name": "Player", "url": src})
+
+        # Legacy JSON match
         if not servers:
-            soup = BeautifulSoup(html, "html.parser")
-            for iframe in soup.find_all("iframe"):
-                src = iframe.get("src") or iframe.get("data-src")
-                if src and src.startswith("https") and not any(ex in src for ex in EXCLUDED_DOMAINS):
-                    servers.append({"name": "Embed", "url": src})
+            match = re.search(r"JSON\.parse\('(\[.*?\])'\)", html)
+            if match:
+                try:
+                    raw = re.sub(r'\\u([0-9a-fA-F]{4})', lambda m: chr(int(m.group(1), 16)), match.group(1))
+                    for s in json.loads(raw):
+                        u = s.get("url", "")
+                        if u:
+                            if u.startswith("/"): u = BASE_URL + u
+                            servers.append({"name": s.get("name", "Server"), "url": abs_url(u)})
+                except: pass
+        
         return servers
 
     def scrape_episode_data(self, url):
         html = fetch(self.session, url)
         if not html: return [], []
         soup = BeautifulSoup(html, "html.parser")
-        w_url, d_url = None, None
-        for a in soup.find_all("a", href=True):
-            h = abs_url(a["href"])
-            if h and "/watch/" in h: w_url = h
-            elif h and "/download/" in h: d_url = h
-        watch = self.scrape_watch_links(w_url) if w_url else []
+        
+        # Check if current page is already an episode page with watch/download links
+        watch = self.scrape_watch_links(url)
         dl = []
-        if d_url:
-            d_html = fetch(self.session, d_url)
-            if d_html:
-                dsoup = BeautifulSoup(d_html, "html.parser")
-                for a in dsoup.select("a.btn-down, .servers a[href]"):
-                    href = a.get("href")
-                    if href and href.startswith("https") and not any(ex in href for ex in EXCLUDED_DOMAINS):
-                        dl.append({"name": a.get_text(strip=True) or "DL", "url": href})
+        for a in soup.select(".downloadLinks a, a.btn-down, .servers a[href]"):
+            href = a.get("href")
+            if href and (href.startswith("http") or href.startswith("//")) and not any(ex in href for ex in EXCLUDED_DOMAINS):
+                dl.append({"name": a.get_text(strip=True) or "DL", "url": abs_url(href)})
+
+        if not watch and not dl:
+            # Try finding watch/download buttons
+            w_url, d_url = None, None
+            for a in soup.find_all("a", href=True):
+                h = abs_url(a["href"])
+                if h and "/watch/" in h: w_url = h
+                elif h and "/download/" in h: d_url = h
+            
+            if w_url: watch = self.scrape_watch_links(w_url)
+            if d_url:
+                d_html = fetch(self.session, d_url)
+                if d_html:
+                    dsoup = BeautifulSoup(d_html, "html.parser")
+                    for a in dsoup.select("a.btn-down, .servers a[href]"):
+                        href = a.get("href")
+                        if href and (href.startswith("http") or href.startswith("//")) and not any(ex in href for ex in EXCLUDED_DOMAINS):
+                            dl.append({"name": a.get_text(strip=True) or "DL", "url": abs_url(href)})
+        
         return watch, dl
 
     def is_matching(self, meta):
@@ -165,7 +206,9 @@ class BaseScraper:
         return any(kw.lower() in text_to_check for kw in self.required_keywords)
 
     def process_item(self, url, results, parent_id=None, force_match=False):
-        is_series = "/series/" in url or "/mosalsal/" in url
+        is_episode = "/episode/" in url or "/ep-" in url or "/anime-episodes/" in url
+        is_movie = "/film/" in url
+        is_series = ("/series/" in url or "/mosalsal/" in url or ("/anime/" in url and not is_episode and not is_movie))
         is_season = "/season/" in url
         
         if url in self.seen_urls:
@@ -187,8 +230,7 @@ class BaseScraper:
             self.logger.info(f"   [SKIP] Does not match requirements: {meta['title']}")
             return
 
-        is_episode = "/episode/" in url or "/ep-" in url
-        is_movie = "/film/" in url
+        # Metadata is now extracted
 
         if is_episode and meta.get("series_url") and meta["series_url"] not in self.processed_series and meta["series_url"] != url:
             self.logger.info(f"   [REDIRECT] episode -> series: {meta['series_url']}")
@@ -224,11 +266,19 @@ class BaseScraper:
                 pg = fetch(self.session, curr) if curr != url else html
                 if not pg: break
                 ps = BeautifulSoup(pg, "html.parser")
-                for a in ps.select(".show-card, .box-item a, .ep-card a, .season-card a, .breadcrumb a"):
+                for a in ps.select(".show-card, .box-item a, .ep-card a, .season-card a, .breadcrumb a, .post-item a, .movie-item a, .postDiv a, .itemviews a, .epAll a"):
                     f = abs_url(a.get("href"))
-                    if f and f not in self.seen_urls and ("/episode/" in f or "/ep-" in f or "/season/" in f or "/mosalsal/" in f or "/series/" in f):
+                    if f and f not in self.seen_urls and ("/episode/" in f or "/ep-" in f or "/season/" in f or "/mosalsal/" in f or "/series/" in f or "/film/" in f or "/anime-episodes/" in f):
                         if f == url: continue
                         if f not in child_urls: child_urls.append(f)
+                
+                for div in ps.select(".seasonDiv"):
+                    oc = div.get("onclick", "")
+                    m = re.search(r"location\.href\s*=\s*['\"]([^'\"]+)['\"]", oc)
+                    if m:
+                        f = abs_url(m.group(1))
+                        if f and f not in self.seen_urls and f not in child_urls:
+                            child_urls.append(f)
                 
                 if not child_urls:
                     for a in ps.find_all("a", href=True):
@@ -237,7 +287,13 @@ class BaseScraper:
                             if f == url: continue
                             if f not in child_urls: child_urls.append(f)
 
-                next_btn = ps.select_one("a.next, .pagination .next a")
+                next_btn = ps.select_one("a.next, .pagination .next a, .pagination li a[href*='/page/']")
+                # For pagination that uses symbols like › or »
+                if not next_btn:
+                    for a in ps.select(".pagination li a"):
+                        if "›" in a.get_text() or ">" in a.get_text():
+                            next_btn = a
+                            break
                 curr = abs_url(next_btn.get("href")) if next_btn else None
 
             seasons = [u for u in child_urls if "/season/" in u]
@@ -275,12 +331,12 @@ class BaseScraper:
                     pg = fetch(self.session, curr) if curr != url else html
                     if not pg: break
                     ps = BeautifulSoup(pg, "html.parser")
-                    for a in ps.select(".show-card, .box-item a, .ep-card a"):
+                    for a in ps.select(".show-card, .box-item a, .ep-card a, .post-item a, .movie-item a, .postDiv a, .itemviews a, .epAll a"):
                         f = abs_url(a.get("href"))
-                        if f and f not in self.seen_urls and ("/episode/" in f or "/ep-" in f):
+                        if f and f not in self.seen_urls and ("/episode/" in f or "/ep-" in f or "/anime-episodes/" in f):
                             if f not in child_urls: child_urls.append(f)
                     
-                    next_btn = ps.select_one("a.next, .pagination .next a")
+                    next_btn = ps.select_one("a.next, .pagination .next a, .pagination li a[href*='/page/']")
                     curr = abs_url(next_btn.get("href")) if next_btn else None
                 
                 def sort_k(x):
@@ -338,7 +394,7 @@ class BaseScraper:
                     if not html: break
                     soup = BeautifulSoup(html, "html.parser")
                     links = []
-                    for a in soup.select("a.show-card, .box-item a, article a, h2 a"):
+                    for a in soup.select("a.show-card, .box-item a, article a, h2 a, .post-item a, .movie-item a, .postDiv a, .itemviews a"):
                         h = abs_url(a.get("href"))
                         if h and h not in links: links.append(h)
                     for l in links:
@@ -347,7 +403,13 @@ class BaseScraper:
                         self.process_item(l, results)
                     
                     page_num += 1
-                    next_btn = soup.select_one("a.next, .pagination .next a")
+                    next_btn = soup.select_one("a.next, .pagination .next a, .pagination li a[href*='/page/']")
+                    # Handle symbol-based next buttons if not found by selector
+                    if not next_btn:
+                        for a in soup.select(".pagination li a"):
+                            if "›" in a.get_text() or ">" in a.get_text():
+                                next_btn = a
+                                break
                     curr = abs_url(next_btn.get("href")) if next_btn else None
                 
                 if page_num > args.max_pages:

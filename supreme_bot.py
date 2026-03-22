@@ -20,9 +20,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── Config ─────────────────────────────────────────────────────
-BASE_URL = "https://shaaheid4u.net"
+BASE_URL = "https://web32218x.faselhdx.bid"
 RAMADAN_CATEGORIES = [
-    "https://shaaheid4u.net/category/مسلسلات-رمضان-2026"
+    "https://web32218x.faselhdx.bid/series/رمضان-2026"
 ]
 DEFAULT_MAX_PAGES = 3
 FULL_MAX_PAGES = 50
