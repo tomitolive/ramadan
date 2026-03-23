@@ -53,7 +53,7 @@ jobs:
             || echo "Nothing to commit — no new data this run."
 
           # NOW safe to rebase — working tree is clean
-          git pull --rebase origin main
+          git pull --rebase -X theirs origin main
 
           git push origin main
         env:

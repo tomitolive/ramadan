@@ -41,7 +41,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add bots/*/data/*.json || true
           git commit -m "chore: hourly episode update [$(date -u '+%Y-%m-%d %H:%M UTC')]" || echo "No new updates."
-          git pull --rebase origin main
+          git pull --rebase -X theirs origin main
           git push origin main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
