@@ -129,12 +129,13 @@ class BaseScraper:
         
         return meta
 
-    def scrape_watch_links(self, url):
-        html = fetch(self.session, url)
-        if not html: return []
-        servers = []
-        soup = BeautifulSoup(html, "html.parser")
+    def scrape_watch_links(self, url, soup=None):
+        if not soup:
+            html = fetch(self.session, url)
+            if not html: return []
+            soup = BeautifulSoup(html, "html.parser")
         
+        servers = []
         # New site servers list
         for li in soup.select("ul.tabs-ul li"):
             name = li.get_text(strip=True)
@@ -150,29 +151,17 @@ class BaseScraper:
             if src and src.startswith("http") and not any(ex in src for ex in EXCLUDED_DOMAINS):
                 if not any(s["url"] == src for s in servers):
                     servers.append({"name": "Player", "url": src})
-
-        # Legacy JSON match
-        if not servers:
-            match = re.search(r"JSON\.parse\('(\[.*?\])'\)", html)
-            if match:
-                try:
-                    raw = re.sub(r'\\u([0-9a-fA-F]{4})', lambda m: chr(int(m.group(1), 16)), match.group(1))
-                    for s in json.loads(raw):
-                        u = s.get("url", "")
-                        if u:
-                            if u.startswith("/"): u = BASE_URL + u
-                            servers.append({"name": s.get("name", "Server"), "url": abs_url(u)})
-                except: pass
         
         return servers
 
-    def scrape_episode_data(self, url):
-        html = fetch(self.session, url)
-        if not html: return [], []
-        soup = BeautifulSoup(html, "html.parser")
+    def scrape_episode_data(self, url, soup=None):
+        if not soup:
+            html = fetch(self.session, url)
+            if not html: return [], []
+            soup = BeautifulSoup(html, "html.parser")
         
         # Check if current page is already an episode page with watch/download links
-        watch = self.scrape_watch_links(url)
+        watch = self.scrape_watch_links(url, soup=soup)
         dl = []
         for a in soup.select(".downloadLinks a, a.btn-down, .servers a[href]"):
             href = a.get("href")
@@ -206,8 +195,8 @@ class BaseScraper:
         return any(kw.lower() in text_to_check for kw in self.required_keywords)
 
     def process_item(self, url, results, parent_id=None, force_match=False):
-        is_episode = "/episode/" in url or "/ep-" in url or "/anime-episodes/" in url
-        is_movie = "/film/" in url
+        is_episode = "/episode/" in url or "/ep-" in url or "/anime-episodes/" in url or "/ep/" in url
+        is_movie = "/film/" in url or "/movie/" in url or "/movies/" in url
         is_series = ("/series/" in url or "/mosalsal/" in url or ("/anime/" in url and not is_episode and not is_movie))
         is_season = "/season/" in url
         
@@ -333,7 +322,7 @@ class BaseScraper:
                     ps = BeautifulSoup(pg, "html.parser")
                     for a in ps.select(".show-card, .box-item a, .ep-card a, .post-item a, .movie-item a, .postDiv a, .itemviews a, .epAll a"):
                         f = abs_url(a.get("href"))
-                        if f and f not in self.seen_urls and ("/episode/" in f or "/ep-" in f or "/anime-episodes/" in f):
+                        if f and f not in self.seen_urls and ("/episode/" in f or "/ep-" in f or "/anime-episodes/" in f or "/ep/" in f):
                             if f not in child_urls: child_urls.append(f)
                     
                     next_btn = ps.select_one("a.next, .pagination .next a, .pagination li a[href*='/page/']")
@@ -351,7 +340,7 @@ class BaseScraper:
                     self.process_item(c, results, parent_id, force_match=True)
                 return
 
-            watch, dl = self.scrape_episode_data(url)
+            watch, dl = self.scrape_episode_data(url, soup=soup)
             item = {
                 "id": native_id, "url": url, "type": "episode" if is_episode else "movie",
                 "title": meta["title"], "poster": meta["poster"], "description": meta["description"],

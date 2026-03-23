@@ -76,10 +76,14 @@ def abs_url(href, base=BASE_URL):
     if not href.startswith("http"):
         url = base.rstrip("/") + "/" + href.lstrip("/")
     
-    for dom in ["shhahiid4u.net", "shaaheed4u.net", "shaaheid4u.net", "faselhd.club", "faselhd.pro", "fasel-hd.cam"]:
-        url = url.replace(dom, "web32218x.faselhdx.bid")
+    for dom in ["shhahiid4u.net", "shaaheed4u.net", "shaaheid4u.net", "faselhd.club", "faselhd.pro", "faselhd.cloud", "faselhd.cam"]:
+        if dom in url:
+            url = url.replace(dom, BASE_URL.replace("https://", ""))
     
-    # Special case for 'faselhd' without extension, avoid replacing if already new domain
-    if "faselhd" in url and "web32218x.faselhdx.bid" not in url:
-        url = url.replace("faselhd", "web32218x.faselhdx.bid")
+    # Special case for variants of faselhd
+    if "faselhdx.bid" not in url:
+        for variant in ["faselhd.com", "faselhd.net", "faselhd.me"]:
+             if variant in url:
+                 url = url.replace(variant, BASE_URL.replace("https://", ""))
+                 
     return url
